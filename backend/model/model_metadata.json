@@ -1,0 +1,27 @@
+{
+    "dataset_shapes": {
+        "original_dataset": [
+            5630,
+            20
+        ],
+        "training_set": [
+            4504,
+            21
+        ],
+        "test_set": [
+            1126,
+            21
+        ]
+    },
+    "models": {
+        "xgboost_challenger": {
+            "metrics_on_test": {
+                "accuracy": 0.9857904085257548,
+                "precision": 0.967741935483871,
+                "recall": 0.9473684210526315,
+                "f1_score": 0.9574468085106383,
+                "roc_auc": 0.9971547458389564
+            }
+        }
+    }
+}

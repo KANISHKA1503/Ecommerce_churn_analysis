@@ -1,0 +1,33 @@
+{
+    "numerical_features": [
+        "Tenure",
+        "CityTier",
+        "WarehouseToHome",
+        "HourSpendOnApp",
+        "NumberOfDeviceRegistered",
+        "SatisfactionScore",
+        "NumberOfAddress",
+        "Complain",
+        "OrderAmountHikeFromlastYear",
+        "CouponUsed",
+        "OrderCount",
+        "DaySinceLastOrder",
+        "CashbackAmount",
+        "Complaint_Impact",
+        "Distance_Risk",
+        "Engagement_Score"
+    ],
+    "categorical_features": [
+        "PreferredLoginDevice",
+        "PreferredPaymentMode",
+        "Gender",
+        "PreferedOrderCat",
+        "MaritalStatus"
+    ],
+    "engineered_features_statistics": {
+        "warehouse_75th_percentile": 20.0,
+        "tenure_max": 61.0,
+        "hour_spend_max": 5.0,
+        "day_since_last_max": 46.0
+    }
+}

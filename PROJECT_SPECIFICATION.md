@@ -48,6 +48,7 @@ The system combines:
 | **PostCSS** | Autoprefixer | `10.6.1` | Cross-browser CSS prefixes |
 | **Icons** | Lucide React | `1.51.0` | Crisp SVG iconography |
 | **Charts** | Recharts | `3.10.1` | Interactive SVG data visualizations (Pie, Bar) |
+| **Visual Export** | html2canvas | `1.4.1` | High-resolution DOM-to-PNG chart image rasterization |
 | **HTTP Client** | Axios | `1.20.0` | Promise-based REST client with interceptors |
 
 ---
@@ -214,10 +215,15 @@ All endpoints are hosted at `http://127.0.0.1:8000` with automated OpenAPI/Swagg
     - Summary aggregates (`total_records`, `churn_count`, `retained_count`, `risk_breakdown`).
 
 ### 5.5 Analytics & Segmentation
-- **`GET /analytics/overview`**: Total customers, retained count, churned count, churn rate %, and model evaluation metrics.
+- **`GET /analytics/overview`**: Total customers, retained count, churned count, churn rate %, active dataset status (`is_custom_dataset`, `dataset_name`), and model evaluation metrics.
 - **`GET /analytics/churn-distribution`**: Categorical breakdown of churn rates grouped by `PreferedOrderCat`, `CityTier`, and `PreferredPaymentMode`.
 - **`GET /analytics/feature-importance`**: Normalized feature importance extracted directly from the XGBoost booster.
 - **`GET /analytics/segments`**: Cohort analysis across tenure brackets (`0-6m`, `7-12m`, `13-24m`, `24m+`).
+- **`POST /analytics/upload-dataset`**: Activates uploaded JSON customer records across the platform, immediately recalculating all KPIs and cohorts.
+- **`POST /analytics/upload-csv`**: Activates a multipart CSV file upload across all platform dashboards.
+- **`POST /analytics/reset-dataset`**: Clears active dataset back to initial clean upload state.
+- **`POST /analytics/load-baseline`**: Optionally loads the 5,630-record historical baseline for demonstration.
+- **`GET /analytics/export-scored-csv`**: Downloads the complete scored CSV with original customer attributes and ML predictions.
 
 ---
 
@@ -230,27 +236,26 @@ frontend/src/
 ├── api/
 │   └── apiClient.js          # Centralized Axios client targeting http://127.0.0.1:8000
 ├── components/
-│   ├── Header.jsx            # Top navbar: active page title, API health dot, manual sync button
+│   ├── Header.jsx            # Top navbar: active page title, API health dot, active dataset pill
 │   ├── Sidebar.jsx           # Dark navy sidebar (#0F172A) with Lucide navigation icons
 │   ├── MetricCard.jsx        # Stat KPI card with color-coded accent badges
 │   ├── RiskBadge.jsx         # Status pill for Low (green), Medium (amber), High (rose) risk
 │   ├── StatusBanner.jsx      # Warning and error alert component
 │   └── LoadingSpinner.jsx    # Smooth SVG loader with contextual status text
 ├── pages/
-│   ├── OverviewDashboard.jsx # 5 KPI stat cards, Churn donut chart, Top Churn Drivers chart
+│   ├── OverviewDashboard.jsx # Initial welcome & upload workflow view; dynamic 5 KPIs, Donut & Bar charts once uploaded
 │   ├── SinglePrediction.jsx  # Customer profile form, empty defaults, presets, live risk gauge
 │   ├── BatchPrediction.jsx   # CSV upload zone, sample CSV download, results table, CSV export
-│   └── CustomerSegmentation.jsx # Cohort analytics by tenure and category risk matrix
-├── App.jsx                   # Main layout container, active tab state, health polling
+│   └── CustomerSegmentation.jsx # Zero-safe tenure cohorts, category risk table, demographic matrices
+├── App.jsx                   # Main layout container, active dataset state, top notification bar
 ├── index.css                 # Inter typography, Tailwind utilities
 └── main.jsx                  # React DOM mount point
 ```
 
 ### 6.1 Page Breakdown
 1. **Overview Dashboard**:
-   - 5 KPI summary cards: Total Accounts (`5,630`), Retained (`4,682`), Churned (`948`), Churn Rate (`16.84%`), Retention Rate (`83.16%`).
-   - Customer Retention Distribution (Recharts donut).
-   - Top Behavioral Churn Drivers (Recharts bar chart with mapped human-readable labels like "Customer Tenure", "Customer Complaints", "Annual Spend Hike").
+   - **Initial State**: Welcoming system overview, 3-step workflow diagram, embedded drag-and-drop CSV upload zone, and "Download Sample CSV" button.
+   - **Active State (Once CSV uploaded)**: 5 KPI summary cards (Total Accounts, Retained, Churned, Churn Rate %, Retention Rate %), Churn Donut chart, Top Churn Risk Drivers, Category churn rates, Demographic rates, and a "Download Scored CSV" button.
 2. **Customer Churn Prediction**:
    - Modular 3-section input form (Account & Engagement, Purchasing & Support, Demographics).
    - Starts with empty inputs and helpful placeholders (`placeholder="e.g. 12"`).
@@ -258,13 +263,14 @@ frontend/src/
    - Displays real-time churn probability gauge, risk classification, flagged risk factors, and recommended interventions.
 3. **Batch Churn Prediction**:
    - Drag-and-drop CSV upload zone.
-   - Built-in "Download Template CSV" button that generates a valid test dataset.
-   - Execution breakdown cards showing distribution across High, Medium, and Low risk.
+   - Built-in "Download Sample Test CSV" button.
+   - Automatic platform-wide dataset activation upon scoring.
    - Searchable, paginated table of scored customers with color-coded probability badges.
-   - Export Scored CSV button to download results.
+   - "Download Scored CSV" button.
 4. **Customer Segmentation**:
-   - Tenure cohort retention cards (identifying higher vulnerability in accounts under 6 months).
-   - Category-level churn risk table comparing customer volume, churn count, and churn rate percentage.
+   - **Initial State**: Clean prompt inviting user to upload a customer CSV to generate cohorts.
+   - **Active State**: Live tenure cohort progression (`0-6m`, `6-12m`, `1-2y`, `2-5y`, `5+y`), category risk breakdown table, and gender/marital segment matrices.
+   - Direct "Download Scored CSV" button.
 
 ---
 
@@ -289,6 +295,8 @@ DS_Prjct/
     ├── src/
     │   ├── api/
     │   │   └── apiClient.js          # Axios API client
+    │   ├── utils/
+    │   │   └── exportVisuals.js      # html2canvas PNG export & printable PDF utility
     │   ├── components/               # Reusable UI component library
     │   │   ├── Header.jsx
     │   │   ├── LoadingSpinner.jsx

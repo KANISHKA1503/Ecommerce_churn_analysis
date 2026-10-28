@@ -26,3 +26,30 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* Print & PDF Export Optimization */
+@media print {
+  aside,
+  header,
+  footer,
+  .no-print,
+  button,
+  input {
+    display: none !important;
+  }
+  body,
+  main,
+  #root {
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+  }
+  .lg\:pl-72 {
+    padding-left: 0 !important;
+  }
+  .break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

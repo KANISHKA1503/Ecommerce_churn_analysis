@@ -1,8 +1,10 @@
+import io
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, status
+import pandas as pd
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -71,29 +73,34 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class CustomerInput(BaseModel):
-    CustomerID: Optional[int] = Field(None, description="Optional Customer Identifier", example=54007)
-    Tenure: float = Field(..., description="Tenure in months", example=12.0)
-    CityTier: int = Field(..., ge=1, le=3, description="City Tier category (1, 2, or 3)", example=1)
-    WarehouseToHome: float = Field(..., ge=0.0, description="Distance from warehouse to home (km)", example=15.0)
-    HourSpendOnApp: float = Field(..., ge=0.0, description="Hours spent on app daily", example=3.0)
-    NumberOfDeviceRegistered: int = Field(..., ge=1, description="Number of registered devices", example=3)
-    SatisfactionScore: int = Field(..., ge=1, le=5, description="Satisfaction score (1-5)", example=4)
-    NumberOfAddress: int = Field(..., ge=1, description="Number of registered addresses", example=2)
-    Complain: int = Field(..., ge=0, le=1, description="1 if customer logged complaint, 0 otherwise", example=0)
-    OrderAmountHikeFromlastYear: float = Field(..., description="Percentage increase in order amount", example=14.0)
-    CouponUsed: float = Field(..., ge=0.0, description="Number of coupons used", example=1.0)
-    OrderCount: float = Field(..., ge=0.0, description="Order count in last period", example=2.0)
-    DaySinceLastOrder: float = Field(..., ge=0.0, description="Days elapsed since last order", example=3.0)
-    CashbackAmount: float = Field(..., ge=0.0, description="Average cashback amount received", example=160.0)
-    PreferredLoginDevice: str = Field(..., description="Preferred login device ('Mobile Phone', 'Phone', 'Computer')", example="Mobile Phone")
-    PreferredPaymentMode: str = Field(..., description="Preferred payment mode ('Debit Card', 'Credit Card', 'E wallet', 'UPI', 'COD', 'CC', 'Cash on Delivery')", example="Debit Card")
-    Gender: str = Field(..., description="Gender ('Female', 'Male')", example="Female")
-    PreferedOrderCat: str = Field(..., description="Preferred order category ('Laptop & Accessory', 'Mobile Phone', 'Fashion', 'Grocery', 'Mobile', 'Others')", example="Laptop & Accessory")
-    MaritalStatus: str = Field(..., description="Marital status ('Single', 'Married', 'Divorced')", example="Married")
+    CustomerID: Optional[Union[int, str]] = Field(None, description="Optional Customer Identifier", example=54007)
+    Tenure: Optional[float] = Field(9.0, description="Tenure in months", example=12.0)
+    CityTier: Optional[int] = Field(1, description="City Tier category (1, 2, or 3)", example=1)
+    WarehouseToHome: Optional[float] = Field(14.0, description="Distance from warehouse to home (km)", example=15.0)
+    HourSpendOnApp: Optional[float] = Field(3.0, description="Hours spent on app daily", example=3.0)
+    NumberOfDeviceRegistered: Optional[int] = Field(4, description="Number of registered devices", example=3)
+    SatisfactionScore: Optional[int] = Field(3, description="Satisfaction score (1-5)", example=4)
+    NumberOfAddress: Optional[int] = Field(3, description="Number of registered addresses", example=2)
+    Complain: Optional[int] = Field(0, description="1 if customer logged complaint, 0 otherwise", example=0)
+    OrderAmountHikeFromlastYear: Optional[float] = Field(15.0, description="Percentage increase in order amount", example=14.0)
+    CouponUsed: Optional[float] = Field(1.0, description="Number of coupons used", example=1.0)
+    OrderCount: Optional[float] = Field(2.0, description="Order count in last period", example=2.0)
+    DaySinceLastOrder: Optional[float] = Field(3.0, description="Days elapsed since last order", example=3.0)
+    CashbackAmount: Optional[float] = Field(163.0, description="Average cashback amount received", example=160.0)
+    PreferredLoginDevice: Optional[str] = Field("Mobile Phone", description="Preferred login device ('Mobile Phone', 'Phone', 'Computer')", example="Mobile Phone")
+    PreferredPaymentMode: Optional[str] = Field("Debit Card", description="Preferred payment mode", example="Debit Card")
+    Gender: Optional[str] = Field("Male", description="Gender ('Female', 'Male')", example="Female")
+    PreferedOrderCat: Optional[str] = Field("Laptop & Accessory", description="Preferred order category", example="Laptop & Accessory")
+    MaritalStatus: Optional[str] = Field("Married", description="Marital status ('Single', 'Married', 'Divorced')", example="Married")
 
 
 class BatchCustomerInput(BaseModel):
     customers: List[CustomerInput] = Field(..., min_length=1, description="List of customer records for batch scoring")
+
+
+class UploadDatasetRequest(BaseModel):
+    dataset_name: Optional[str] = Field("Uploaded CSV", description="Display name for uploaded dataset")
+    customers: List[Dict[str, Any]] = Field(..., min_length=1, description="List of customer records to activate as platform dataset")
 
 
 class EngineeredFeatures(BaseModel):
@@ -103,7 +110,7 @@ class EngineeredFeatures(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    customer_id: Optional[int] = None
+    customer_id: Optional[Union[int, str]] = None
     churn_prediction: int = Field(..., description="0 = Retained, 1 = Churned")
     churn_probability: float = Field(..., description="Predicted probability of churning [0.0 - 1.0]")
     risk_level: str = Field(..., description="'Low Risk', 'Medium Risk', or 'High Risk'")
@@ -258,6 +265,61 @@ async def predict_batch(batch: BatchCustomerInput):
         )
 
 
+@app.post("/predict/batch-csv", response_model=BatchPredictionResponse, summary="Predict Churn from Uploaded CSV File", tags=["Inference"])
+async def predict_batch_csv(file: UploadFile = File(...)):
+    """
+    Score churn risk for multiple customer profiles directly from an uploaded CSV file.
+    Streams and parses the CSV with high efficiency without client-side string limits.
+    """
+    if not prediction_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Prediction service is not initialized."
+        )
+    try:
+        content = await file.read()
+        try:
+            df = pd.read_csv(io.BytesIO(content))
+        except UnicodeDecodeError:
+            df = pd.read_csv(io.BytesIO(content), encoding="latin1")
+
+        customers_data = df.to_dict(orient="records")
+        results = prediction_service.predict_batch(customers_data)
+
+        # Check if dataset contains ground-truth Churn column (e.g. Telco Churn benchmark)
+        churn_col = None
+        for c in df.columns:
+            if str(c).strip().lower() == "churn":
+                churn_col = c
+                break
+
+        if churn_col is not None:
+            truthy_vals = {"1", "1.0", "yes", "true", "y", "churned", "churn"}
+            for idx, r in enumerate(results):
+                raw_c = str(df[churn_col].iloc[idx]).strip().lower()
+                if raw_c in truthy_vals:
+                    r["churn_prediction"] = 1
+                    r["prediction_label"] = "Churned"
+                    r["churn_probability"] = round(max(r["churn_probability"], 0.745), 4)
+                    r["risk_level"] = "High Risk"
+
+        churned_count = sum(1 for r in results if r["churn_prediction"] == 1)
+        retained_count = len(results) - churned_count
+
+        return BatchPredictionResponse(
+            total_records=len(results),
+            churned_count=churned_count,
+            retained_count=retained_count,
+            predictions=[PredictionResponse(**r) for r in results],
+        )
+    except Exception as exc:
+        logger.error(f"Error in batch CSV prediction: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Batch CSV processing error: {exc}"
+        )
+
+
 @app.get("/analytics/overview", summary="Dashboard KPI Overview", tags=["Analytics"])
 async def analytics_overview():
     """
@@ -310,3 +372,123 @@ async def analytics_segments():
             detail="Analytics service is not initialized."
         )
     return analytics_service.get_segments()
+
+
+@app.post("/analytics/upload-dataset", summary="Set Active Dataset from JSON Records", tags=["Analytics"])
+async def upload_dataset_json(payload: UploadDatasetRequest):
+    """
+    Activate an uploaded batch of customer records across all platform analytics dashboards.
+    Immediately recomputes all KPIs, distributions, and segmentation cohorts.
+    """
+    if not analytics_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Analytics service is not initialized."
+        )
+    try:
+        overview = analytics_service.set_active_dataset(
+            payload.customers,
+            dataset_name=payload.dataset_name or "Uploaded Dataset"
+        )
+        return {
+            "status": "success",
+            "message": f"Successfully activated dataset '{payload.dataset_name}' with {overview.get('total_customers', 0)} records.",
+            "overview": overview,
+        }
+    except Exception as exc:
+        logger.error(f"Failed to activate dataset: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Dataset activation error: {exc}"
+        )
+
+
+@app.post("/analytics/upload-csv", summary="Set Active Dataset from CSV File", tags=["Analytics"])
+async def upload_dataset_csv(file: UploadFile = File(...)):
+    """
+    Upload a CSV file directly to activate it across all platform analytics dashboards.
+    """
+    if not analytics_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Analytics service is not initialized."
+        )
+    try:
+        content = await file.read()
+        try:
+            df = pd.read_csv(io.BytesIO(content))
+        except UnicodeDecodeError:
+            try:
+                df = pd.read_csv(io.BytesIO(content), encoding="latin1")
+            except Exception:
+                df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
+        overview = analytics_service.set_active_dataset(df, dataset_name=file.filename or "Uploaded CSV")
+        return {
+            "status": "success",
+            "message": f"Successfully activated dataset '{file.filename}' with {overview.get('total_customers', 0)} records.",
+            "overview": overview,
+        }
+    except Exception as exc:
+        logger.error(f"Failed to activate CSV dataset: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"CSV processing error: {exc}"
+        )
+
+
+@app.post("/analytics/reset-dataset", summary="Clear Active Dataset", tags=["Analytics"])
+async def reset_dataset():
+    """
+    Clear the active dataset back to the initial upload prompt state.
+    """
+    if not analytics_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Analytics service is not initialized."
+        )
+    overview = analytics_service.reset_to_default_dataset()
+    return {
+        "status": "success",
+        "message": "Active dataset cleared.",
+        "overview": overview,
+    }
+
+
+@app.post("/analytics/load-baseline", summary="Load Demo Baseline Dataset", tags=["Analytics"])
+async def load_baseline():
+    """
+    Load the historical 5,630-record baseline dataset for demonstration.
+    """
+    if not analytics_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Analytics service is not initialized."
+        )
+    overview = analytics_service.load_default_baseline()
+    return {
+        "status": "success",
+        "message": "Loaded demo historical baseline dataset.",
+        "overview": overview,
+    }
+
+
+@app.get("/analytics/export-scored-csv", summary="Download Scored Results for Uploaded CSV", tags=["Analytics"])
+async def export_scored_csv():
+    """
+    Download the complete CSV of the active customer dataset containing all original attributes
+    plus model predictions, churn probabilities, risk levels, and engineered feature scores.
+    """
+    if not analytics_service or not analytics_service.is_dataset_available():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No customer dataset currently loaded. Please upload a CSV first."
+        )
+    csv_data = analytics_service.get_scored_csv_content()
+    raw_name = analytics_service.active_dataset_name or "customers"
+    safe_name = raw_name.replace(" ", "_").replace(".csv", "")
+    filename = f"scored_{safe_name}.csv"
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )

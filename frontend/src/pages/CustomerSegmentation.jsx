@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   Users,
-  PieChart as PieIcon,
   BarChart3,
   Calendar,
   Layers,
   Database,
-  Info,
+  UploadCloud,
+  Download,
+  Camera,
+  Printer,
+  Sparkles,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -22,9 +25,15 @@ import {
 import api from '../api/apiClient';
 import StatusBanner from '../components/StatusBanner';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { downloadVisualAsPng, exportVisualAsPdf } from '../utils/exportVisuals';
 
-export const CustomerSegmentation = () => {
+export const CustomerSegmentation = ({
+  activeDatasetInfo,
+  onResetDataset,
+  onNavigateToBatch,
+}) => {
   const [loading, setLoading] = useState(true);
+  const [exportingPng, setExportingPng] = useState(false);
   const [error, setError] = useState(null);
   const [segments, setSegments] = useState(null);
   const [distribution, setDistribution] = useState(null);
@@ -51,204 +60,374 @@ export const CustomerSegmentation = () => {
     fetchSegmentationData();
   }, []);
 
+  const handleDownloadScoredCsv = async () => {
+    try {
+      const res = await api.downloadScoredCsv();
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const link = document.createElement('a');
+      link.href = url;
+      const safeName = (segments?.dataset_name || 'customer_segments').replace(/\s+/g, '_').replace('.csv', '');
+      link.setAttribute('download', `scored_${safeName}_cohorts.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      alert('Failed to download scored CSV: ' + err.message);
+    }
+  };
+
+  const handleExportSegmentationPng = async () => {
+    setExportingPng(true);
+    await downloadVisualAsPng('segmentation-visuals-export', `segmentation_visuals_${Date.now()}.png`);
+    setExportingPng(false);
+  };
+
+  const handleExportSingleChart = (chartId, chartName) => {
+    downloadVisualAsPng(chartId, `${chartName}_${Date.now()}.png`);
+  };
+
+  const handleLoadDemoBaseline = async () => {
+    try {
+      setLoading(true);
+      await api.loadBaseline();
+      await fetchSegmentationData();
+    } catch (err) {
+      setError(err.message || 'Failed to load demo baseline.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (loading) {
     return <LoadingSpinner label="Loading customer segmentation cohorts..." size="lg" />;
   }
 
   const isDatasetAvailable = segments?.dataset_available === true;
+  const tenureCohorts = segments?.tenure_segments || [];
+  const categorySegments = segments?.order_category_segments || [];
+  const genderSegments = segments?.gender_segments || [];
+  const maritalSegments = segments?.marital_status_segments || [];
+  const totalAccounts = segments?.total_customers || 0;
 
-  // Fallback benchmark segment data when live CSV dataset is not connected
-  const orderCatData =
-    isDatasetAvailable && segments?.order_category_segments?.length > 0
-      ? segments.order_category_segments
-      : [
-          { category: 'Mobile Phone', total_customers: 1271, churned_customers: 348, churn_rate_percent: 27.4 },
-          { category: 'Mobile', total_customers: 809, churned_customers: 217, churn_rate_percent: 26.8 },
-          { category: 'Fashion', total_customers: 826, churned_customers: 131, churn_rate_percent: 15.9 },
-          { category: 'Laptop & Acc', total_customers: 2050, churned_customers: 207, churn_rate_percent: 10.1 },
-          { category: 'Grocery', total_customers: 410, churned_customers: 20, churn_rate_percent: 4.9 },
-          { category: 'Others', total_customers: 264, churned_customers: 29, churn_rate_percent: 10.8 },
-        ];
+  /* -------------------------------------------------------------
+     VIEW A: INITIAL EMPTY STATE (NO CSV UPLOADED YET)
+     ------------------------------------------------------------- */
+  if (!isDatasetAvailable) {
+    return (
+      <div className="space-y-6 max-w-2xl mx-auto py-8">
+        {error && (
+          <StatusBanner
+            type="warning"
+            title="Notification"
+            message={error}
+          />
+        )}
 
-  const tenureCohortData =
-    isDatasetAvailable && segments?.tenure_segments?.length > 0
-      ? segments.tenure_segments
-      : [
-          { TenureCohort: '0-6 Months', total_customers: 1620, churned_customers: 580, churn_rate_percent: 35.8 },
-          { TenureCohort: '6-12 Months', total_customers: 1210, churned_customers: 195, churn_rate_percent: 16.1 },
-          { TenureCohort: '1-2 Years', total_customers: 1480, churned_customers: 125, churn_rate_percent: 8.4 },
-          { TenureCohort: '2-5 Years', total_customers: 1120, churned_customers: 42, churn_rate_percent: 3.8 },
-          { TenureCohort: '5+ Years', total_customers: 200, churned_customers: 4, churn_rate_percent: 2.0 },
-        ];
+        <div className="bg-white rounded-2xl border border-slate-200/90 p-8 text-center shadow-sm">
+          <div className="w-14 h-14 rounded-2xl bg-cyan-100/70 text-cyan-700 flex items-center justify-center mx-auto mb-3 shadow-xs">
+            <Layers className="w-7 h-7" />
+          </div>
 
-  const maritalData =
-    isDatasetAvailable && segments?.marital_status_segments?.length > 0
-      ? segments.marital_status_segments
-      : [
-          { category: 'Single', total_customers: 1796, churned_customers: 480, churn_rate_percent: 26.7 },
-          { category: 'Divorced', total_customers: 848, churned_customers: 124, churn_rate_percent: 14.6 },
-          { category: 'Married', total_customers: 2986, churned_customers: 342, churn_rate_percent: 11.5 },
-        ];
+          <h2 className="text-xl font-bold text-slate-900 mb-1">
+            Customer Segmentation Cohorts
+          </h2>
+          <p className="text-xs text-slate-500 mb-6 max-w-md mx-auto">
+            Upload your customer dataset to calculate tenure lifecycle progression, product category risk tables, and demographic segments.
+          </p>
 
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {onNavigateToBatch && (
+              <button
+                type="button"
+                onClick={onNavigateToBatch}
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white font-semibold rounded-xl text-xs shadow-sm transition"
+              >
+                <UploadCloud className="w-4 h-4" />
+                Upload Customer CSV
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleLoadDemoBaseline}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 font-semibold rounded-xl text-xs transition"
+            >
+              <Database className="w-4 h-4 text-cyan-600" />
+              Load Demo Dataset (5.6k)
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* -------------------------------------------------------------
+     VIEW B: ACTIVE SEGMENTATION (CSV UPLOADED)
+     Visual-first, uncluttered, with Visuals (PNG), PDF, and CSV download
+     ------------------------------------------------------------- */
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" id="segmentation-visuals-export">
       {error && (
         <StatusBanner
           type="warning"
-          title="Data Loading Warning"
+          title="Notification"
           message={error}
         />
       )}
 
-      {/* Dataset State Banner */}
-      {!isDatasetAvailable && (
-        <StatusBanner
-          type="dataset"
-          title="Customer Segment Analytics"
-          message="Displaying platform customer cohort distributions and tenure lifecycle analysis."
-        />
-      )}
+      {/* Top Action Bar */}
+      <div className="bg-white rounded-xl border border-slate-200/80 p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 no-export">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-pulse" />
+          <span className="font-bold text-sm text-slate-900">
+            {segments.dataset_name || 'Active Customer Cohorts'}
+          </span>
+          <span className="text-xs text-slate-400 font-medium">
+            ({totalAccounts.toLocaleString()} customer accounts)
+          </span>
+        </div>
 
-      {/* Grid 1: Tenure Analysis & Order Category */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Tenure Cohorts */}
-        <div className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-semibold text-slate-900 text-sm">
-                Customer Tenure Cohort Analysis
-              </h3>
-              <p className="text-xs text-slate-500">
-                Churn rate progression across customer lifecycle stages
-              </p>
+        {/* Visual Export & CSV Download Controls */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Download Visuals as PNG */}
+          <button
+            type="button"
+            onClick={handleExportSegmentationPng}
+            disabled={exportingPng}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-cyan-200 bg-cyan-50 text-cyan-800 hover:bg-cyan-100 text-xs font-semibold shadow-xs transition disabled:opacity-50"
+            title="Download complete visual segmentation as a high-resolution PNG image"
+          >
+            <Camera className="w-3.5 h-3.5 text-cyan-700" />
+            {exportingPng ? 'Capturing Image...' : 'Save Visuals (PNG)'}
+          </button>
+
+          {/* Export PDF / Print */}
+          <button
+            type="button"
+            onClick={exportVisualAsPdf}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-xs transition"
+            title="Print or save as executive PDF report"
+          >
+            <Printer className="w-3.5 h-3.5 text-slate-500" />
+            Export PDF
+          </button>
+
+          {/* Download Scored CSV */}
+          <button
+            type="button"
+            onClick={handleDownloadScoredCsv}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition"
+            title="Download scored customer cohort records as CSV"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export CSV
+          </button>
+
+          {onNavigateToBatch && (
+            <button
+              type="button"
+              onClick={onNavigateToBatch}
+              className="px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-800 transition font-medium"
+            >
+              Upload New
+            </button>
+          )}
+          {onResetDataset && (
+            <button
+              type="button"
+              onClick={onResetDataset}
+              className="px-2 py-1.5 text-xs text-rose-600 hover:text-rose-800 transition font-semibold"
+              title="Clear active dataset"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tenure Cohorts Overview Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {tenureCohorts.map((cohort, idx) => (
+          <div key={idx} className="bg-white rounded-xl border border-slate-200/80 p-4 shadow-xs">
+            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+              {cohort.TenureCohort}
+            </span>
+            <div className="flex items-baseline justify-between">
+              <span className="text-lg font-bold text-slate-900">
+                {cohort.total_customers}
+              </span>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                cohort.churn_rate_percent > 30
+                  ? 'bg-rose-50 text-rose-700'
+                  : cohort.churn_rate_percent > 15
+                  ? 'bg-amber-50 text-amber-700'
+                  : 'bg-emerald-50 text-emerald-700'
+              }`}>
+                {cohort.churn_rate_percent}% churn
+              </span>
             </div>
-            <Calendar className="w-4 h-4 text-cyan-600" />
+            <p className="text-[10px] text-slate-400 mt-1">
+              {cohort.churned_customers} at-risk / {cohort.retained_customers} loyal
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Grid: Tenure Progression Chart & Demographic Cohorts */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 break-inside-avoid">
+        {/* Tenure Cohort Bar Chart */}
+        <div id="chart-tenure-progression" className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-xs">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-bold text-slate-900 text-sm">
+              Tenure Lifecycle Churn Progression
+            </h3>
+            <button
+              type="button"
+              onClick={() => handleExportSingleChart('chart-tenure-progression', 'tenure_lifecycle')}
+              className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition no-export"
+              title="Download chart as image"
+            >
+              <Camera className="w-3.5 h-3.5" />
+            </button>
           </div>
 
-          <div className="h-64">
+          <div className="h-56 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={tenureCohortData} margin={{ top: 10, right: 10, left: -10, bottom: 10 }}>
+              <BarChart
+                data={tenureCohorts}
+                margin={{ top: 10, right: 10, left: -20, bottom: 15 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="TenureCohort" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <YAxis unit="%" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <Tooltip
-                  formatter={(val, name) => [
-                    name === 'churn_rate_percent' ? `${val}%` : val,
-                    name === 'churn_rate_percent' ? 'Churn Rate' : 'Total Customers',
-                  ]}
-                  contentStyle={{ backgroundColor: "#0f172a", borderRadius: "8px", border: "none", color: "#fff", fontSize: "12px" }}
+                <XAxis
+                  dataKey="TenureCohort"
+                  tick={{ fontSize: 10, fill: '#64748b' }}
                 />
-                <Bar dataKey="churn_rate_percent" name="churn_rate_percent" fill="#06b6d4" radius={[4, 4, 0, 0]} />
+                <YAxis
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                  tickFormatter={(v) => `${v}%`}
+                />
+                <Tooltip
+                  formatter={(val, name, item) => [
+                    `${val}% churn (${item?.payload?.total_customers || 0} accounts)`,
+                    'Attrition Rate',
+                  ]}
+                  contentStyle={{ borderRadius: '8px', fontSize: '12px' }}
+                />
+                <Bar dataKey="churn_rate_percent" fill="#0891b2" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
-
-          <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-500 flex justify-between items-center">
-            <span>Critical Retention Window: <strong className="text-rose-600">First 0-6 Months</strong></span>
-            <span>Churn Drops by 76% after Year 1</span>
           </div>
         </div>
 
-        {/* Preferred Order Categories */}
-        <div className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="font-semibold text-slate-900 text-sm">
-                Category Segment Risk Profiles
-              </h3>
-              <p className="text-xs text-slate-500">
-                Volume vs Churn Rate by Preferred Order Category
-              </p>
-            </div>
-            <BarChart3 className="w-4 h-4 text-blue-600" />
+        {/* Gender & Marital Demographics */}
+        <div id="chart-demographic-cohorts" className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-xs">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-bold text-slate-900 text-sm">
+              Demographic Attrition Rates
+            </h3>
+            <button
+              type="button"
+              onClick={() => handleExportSingleChart('chart-demographic-cohorts', 'demographic_cohorts')}
+              className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition no-export"
+              title="Download chart as image"
+            >
+              <Camera className="w-3.5 h-3.5" />
+            </button>
           </div>
 
-          <div className="h-64">
+          <div className="h-56 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={orderCatData} margin={{ top: 10, right: 10, left: -10, bottom: 20 }}>
+              <BarChart
+                data={[
+                  ...genderSegments.map((d) => ({
+                    cohort: d.category,
+                    rate: d.churn_rate_percent,
+                    count: d.total_customers,
+                  })),
+                  ...maritalSegments.map((d) => ({
+                    cohort: d.category,
+                    rate: d.churn_rate_percent,
+                    count: d.total_customers,
+                  })),
+                ]}
+                margin={{ top: 10, right: 10, left: -20, bottom: 15 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="category" tick={{ fontSize: 10, fill: '#64748b' }} angle={-20} textAnchor="end" height={45} />
-                <YAxis unit="%" tick={{ fontSize: 11, fill: '#64748b' }} />
-                <Tooltip
-                  formatter={(val, name) => [
-                    name === 'churn_rate_percent' ? `${val}%` : val,
-                    name === 'churn_rate_percent' ? 'Churn Rate' : 'Total Customers',
-                  ]}
-                  contentStyle={{ backgroundColor: "#0f172a", borderRadius: "8px", border: "none", color: "#fff", fontSize: "12px" }}
+                <XAxis
+                  dataKey="cohort"
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                  interval={0}
                 />
-                <Bar dataKey="churn_rate_percent" name="churn_rate_percent" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                <YAxis
+                  tick={{ fontSize: 10, fill: '#64748b' }}
+                  tickFormatter={(v) => `${v}%`}
+                />
+                <Tooltip
+                  formatter={(val, name, item) => [
+                    `${val}% (${item?.payload?.count || 0} accounts)`,
+                    'Churn Rate',
+                  ]}
+                  contentStyle={{ borderRadius: '8px', fontSize: '12px' }}
+                />
+                <Bar dataKey="rate" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </div>
-
-          <div className="mt-3 pt-3 border-t border-slate-100 text-xs text-slate-500 flex justify-between items-center">
-            <span>Highest Churn Category: <strong className="text-slate-900">Mobile Phone Devices</strong></span>
-            <span>Safest Category: <strong className="text-emerald-700">Grocery (4.9%)</strong></span>
           </div>
         </div>
       </div>
 
-      {/* Grid 2: Marital Status & Breakdown Table */}
-      <div className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-sm">
-        <h3 className="font-semibold text-slate-900 text-sm mb-1">
-          Detailed Cohort Breakdown Table
-        </h3>
-        <p className="text-xs text-slate-500 mb-4">
-          Comparative metrics across behavioral and demographic customer cohorts
-        </p>
+      {/* Product Category Risk Table */}
+      <div id="category-risk-table" className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-xs break-inside-avoid">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-slate-900 text-sm">
+            Product Category Risk Matrix
+          </h3>
+          <button
+            type="button"
+            onClick={() => handleExportSingleChart('category-risk-table', 'category_risk_table')}
+            className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition no-export"
+            title="Download table as image"
+          >
+            <Camera className="w-3.5 h-3.5" />
+          </button>
+        </div>
 
-        <div className="border border-slate-200 rounded-xl overflow-hidden">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
-              <tr>
-                <th className="py-3 px-4">Segment Dimension</th>
-                <th className="py-3 px-4">Segment Name</th>
-                <th className="py-3 px-4">Total Customers</th>
-                <th className="py-3 px-4">Churned Count</th>
-                <th className="py-3 px-4">Churn Rate (%)</th>
-                <th className="py-3 px-4">Retention Status</th>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-slate-200 text-slate-500 bg-slate-50/50">
+                <th className="py-2.5 px-3 font-semibold">Category</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Customers</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Retained Base</th>
+                <th className="py-2.5 px-3 font-semibold text-right">At-Risk</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Churn Rate</th>
+                <th className="py-2.5 px-3 font-semibold text-center">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700">
-              {orderCatData.map((row, idx) => (
-                <tr key={`cat-${idx}`} className="hover:bg-slate-50/60 transition">
-                  <td className="py-2.5 px-4 font-medium text-slate-500">Order Category</td>
-                  <td className="py-2.5 px-4 font-semibold text-slate-900">{row.category}</td>
-                  <td className="py-2.5 px-4 font-mono">{row.total_customers.toLocaleString()}</td>
-                  <td className="py-2.5 px-4 font-mono text-rose-600">{row.churned_customers.toLocaleString()}</td>
-                  <td className="py-2.5 px-4 font-mono font-bold">{row.churn_rate_percent}%</td>
-                  <td className="py-2.5 px-4">
+              {categorySegments.map((row, idx) => (
+                <tr key={idx} className="hover:bg-slate-50/60 transition">
+                  <td className="py-2.5 px-3 font-medium text-slate-900">{row.category}</td>
+                  <td className="py-2.5 px-3 text-right">{row.total_customers.toLocaleString()}</td>
+                  <td className="py-2.5 px-3 text-right text-cyan-700 font-medium">
+                    {row.retained_customers.toLocaleString()}
+                  </td>
+                  <td className="py-2.5 px-3 text-right text-rose-600 font-medium">
+                    {row.churned_customers.toLocaleString()}
+                  </td>
+                  <td className="py-2.5 px-3 text-right font-bold">
+                    {row.churn_rate_percent}%
+                  </td>
+                  <td className="py-2.5 px-3 text-center">
                     <span
-                      className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
-                        row.churn_rate_percent >= 20
+                      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                        row.churn_rate_percent > 25
                           ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                          : row.churn_rate_percent >= 12
+                          : row.churn_rate_percent > 12
                           ? 'bg-amber-50 text-amber-700 border border-amber-200'
                           : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                       }`}
                     >
-                      {row.churn_rate_percent >= 20 ? 'High Risk Cohort' : row.churn_rate_percent >= 12 ? 'Moderate' : 'Stable'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-
-              {maritalData.map((row, idx) => (
-                <tr key={`mar-${idx}`} className="hover:bg-slate-50/60 transition">
-                  <td className="py-2.5 px-4 font-medium text-slate-500">Marital Status</td>
-                  <td className="py-2.5 px-4 font-semibold text-slate-900">{row.category}</td>
-                  <td className="py-2.5 px-4 font-mono">{row.total_customers.toLocaleString()}</td>
-                  <td className="py-2.5 px-4 font-mono text-rose-600">{row.churned_customers.toLocaleString()}</td>
-                  <td className="py-2.5 px-4 font-mono font-bold">{row.churn_rate_percent}%</td>
-                  <td className="py-2.5 px-4">
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${
-                        row.churn_rate_percent >= 20
-                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                          : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      }`}
-                    >
-                      {row.churn_rate_percent >= 20 ? 'High Risk Cohort' : 'Stable'}
+                      {row.churn_rate_percent > 25 ? 'High Risk' : row.churn_rate_percent > 12 ? 'Moderate' : 'Low Risk'}
                     </span>
                   </td>
                 </tr>

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+venv/
+ENV/
+env/
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment & IDE
+.env
+.env.local
+.vscode/
+.idea/
+
+# Large Datasets (> 100MB exceeds GitHub push limit)
+customer_churn_1M.csv
+WA_Fn-UseC_-Telco-Customer-Churn.csv
+
+# OS
+.DS_Store
+Thumbs.db

@@ -9,21 +9,43 @@ import {
   Filter,
   RefreshCw,
   Info,
+  Camera,
+  Printer,
 } from 'lucide-react';
 
 import api from '../api/apiClient';
 import RiskBadge from '../components/RiskBadge';
 import StatusBanner from '../components/StatusBanner';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { downloadVisualAsPng, exportVisualAsPdf } from '../utils/exportVisuals';
 
-export const BatchPrediction = () => {
+export const BatchPrediction = ({
+  activeDatasetInfo,
+  onDatasetActivated,
+  onResetDataset,
+  onNavigateToOverview,
+  onNavigateToSegmentation,
+}) => {
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [batchResults, setBatchResults] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterRisk, setFilterRisk] = useState('ALL');
+  const [activationSuccess, setActivationSuccess] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Helper to extract clean numeric value from strings like "1m", "$29.85", "14%"
+  const cleanNumeric = (val, defaultVal = 0) => {
+    if (val === undefined || val === null || val === '') return defaultVal;
+    if (typeof val === 'number') return isNaN(val) ? defaultVal : val;
+    const match = String(val).replace(/,/g, '').match(/[-+]?\d*\.?\d+/);
+    if (match) {
+      const num = parseFloat(match[0]);
+      return isNaN(num) ? defaultVal : num;
+    }
+    return defaultVal;
+  };
 
   // Parse CSV text into array of objects
   const parseCSV = (csvText) => {
@@ -43,26 +65,29 @@ export const BatchPrediction = () => {
 
       headers.forEach((header, index) => {
         const val = values[index];
-        // Cast numerical fields
+        const lowerH = header.toLowerCase().replace(/[\s_-]/g, '');
+
         if (
           [
-            'Tenure',
-            'CityTier',
-            'WarehouseToHome',
-            'HourSpendOnApp',
-            'NumberOfDeviceRegistered',
-            'SatisfactionScore',
-            'NumberOfAddress',
-            'Complain',
-            'OrderAmountHikeFromlastYear',
-            'CouponUsed',
-            'OrderCount',
-            'DaySinceLastOrder',
-            'CashbackAmount',
-            'CustomerID',
-          ].includes(header)
+            'tenure',
+            'months',
+            'citytier',
+            'warehousetohome',
+            'hourspendonapp',
+            'numberofdeviceregistered',
+            'satisfactionscore',
+            'numberofaddress',
+            'complain',
+            'orderamounthikefromlastyear',
+            'couponused',
+            'ordercount',
+            'daysincelastorder',
+            'cashbackamount',
+            'monthlycharges',
+            'totalcharges',
+          ].includes(lowerH)
         ) {
-          row[header] = val !== undefined && val !== '' ? Number(val) : 0;
+          row[header] = cleanNumeric(val);
         } else {
           row[header] = val;
         }
@@ -83,6 +108,7 @@ export const BatchPrediction = () => {
 
     setFile(selected);
     setError(null);
+    setActivationSuccess(false);
   };
 
   const handleProcessFile = async () => {
@@ -90,32 +116,37 @@ export const BatchPrediction = () => {
 
     setLoading(true);
     setError(null);
+    setActivationSuccess(false);
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target.result;
-        const parsedRows = parseCSV(text);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
 
-        if (parsedRows.length === 0) {
-          throw new Error('No customer records parsed from the CSV.');
-        }
+      // 1. Run inference & simultaneously activate dataset on backend using streaming multipart
+      const [predictRes] = await Promise.all([
+        api.predictBatchCsv(formData),
+        api.uploadDatasetCsv(formData),
+      ]);
 
-        const res = await api.predictBatch(parsedRows);
-        setBatchResults(res.data);
-      } catch (err) {
-        setError(err.message || 'Failed to process batch CSV.');
-      } finally {
-        setLoading(false);
+      setBatchResults(predictRes.data);
+      setActivationSuccess(true);
+
+      if (onDatasetActivated) {
+        onDatasetActivated({
+          isCustom: true,
+          name: file.name,
+          recordCount: predictRes.data?.total_records || 0,
+        });
       }
-    };
-
-    reader.onerror = () => {
-      setError('Error reading file.');
+    } catch (err) {
+      const errorMsg =
+        err.response?.data?.detail ||
+        err.message ||
+        'Failed to process batch CSV.';
+      setError(errorMsg);
+    } finally {
       setLoading(false);
-    };
-
-    reader.readAsText(file);
+    }
   };
 
   // Generate Sample Demo CSV for immediate testing
@@ -139,7 +170,21 @@ export const BatchPrediction = () => {
   };
 
   // Export Results to CSV
-  const handleExportResults = () => {
+  const handleExportResults = async () => {
+    try {
+      const res = await api.downloadScoredCsv();
+      const url = window.URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `scored_customer_predictions_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    } catch {
+      // Client-side fallback if backend export is unavailable
+    }
+
     if (!batchResults || !batchResults.predictions) return;
 
     const headers = [
@@ -169,7 +214,7 @@ export const BatchPrediction = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `churn_predictions_export_${Date.now()}.csv`);
+    link.setAttribute('download', `scored_customer_predictions_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -203,15 +248,65 @@ export const BatchPrediction = () => {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleDownloadSampleTemplate}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-cyan-700 bg-cyan-50 border border-cyan-200 rounded-lg hover:bg-cyan-100 transition"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Download Sample Test CSV
-          </button>
+          <div className="flex items-center gap-2">
+            {activeDatasetInfo?.isCustom && onResetDataset && (
+              <button
+                type="button"
+                onClick={onResetDataset}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg hover:bg-rose-100 transition"
+                title="Reset to default baseline (5,630 records)"
+              >
+                Reset to Default
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleDownloadSampleTemplate}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-cyan-700 bg-cyan-50 border border-cyan-200 rounded-lg hover:bg-cyan-100 transition"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download Sample Test CSV
+            </button>
+          </div>
         </div>
+
+        {activationSuccess && (
+          <div className="mb-4 p-4 rounded-xl bg-gradient-to-r from-emerald-50 via-cyan-50 to-blue-50 border border-emerald-300 text-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-semibold text-sm text-slate-900">
+                  Dataset Successfully Activated Across All Dashboards!
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  <strong>{file?.name || 'Uploaded File'}</strong> ({batchResults?.total_records} records) is now driving the <strong>Overview Analytics Dashboard</strong> and <strong>Customer Segmentation</strong>.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              {onNavigateToOverview && (
+                <button
+                  type="button"
+                  onClick={onNavigateToOverview}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold shadow-xs transition"
+                >
+                  Go to Overview Dashboard
+                </button>
+              )}
+              {onNavigateToSegmentation && (
+                <button
+                  type="button"
+                  onClick={onNavigateToSegmentation}
+                  className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-semibold transition"
+                >
+                  Go to Segmentation
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {error && (
           <StatusBanner
@@ -270,7 +365,45 @@ export const BatchPrediction = () => {
 
       {/* Batch Results Section */}
       {batchResults && (
-        <div className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-sm space-y-6">
+        <div id="batch-evaluation-view" className="bg-white rounded-xl border border-slate-200/80 p-6 shadow-sm space-y-6">
+          {/* Summary Header & Export Action Strip */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Scored Cohort Summary</h3>
+              <p className="text-xs text-slate-500">
+                Evaluation results for {batchResults.total_records} customer profiles
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => downloadVisualAsPng('batch-evaluation-view', 'batch-predictions-visual.png')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-cyan-700 bg-cyan-50 border border-cyan-200 rounded-lg hover:bg-cyan-100 transition shadow-xs"
+                title="Download this summary & table view as a high-resolution PNG image"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                Save Visual (PNG)
+              </button>
+              <button
+                type="button"
+                onClick={exportVisualAsPdf}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition shadow-xs"
+                title="Print or export as PDF report"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-500" />
+                Export PDF
+              </button>
+              <button
+                type="button"
+                onClick={handleExportResults}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg shadow-xs transition"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-500" />
+                Export CSV
+              </button>
+            </div>
+          </div>
+
           {/* Summary KPI Strip */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
@@ -301,8 +434,8 @@ export const BatchPrediction = () => {
             </div>
           </div>
 
-          {/* Table Controls (Search, Filter, Export) */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+          {/* Table Controls (Search & Filter) */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
             <div className="flex items-center gap-2 w-full sm:w-auto">
               <div className="relative w-full sm:w-64">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
@@ -318,7 +451,7 @@ export const BatchPrediction = () => {
               <select
                 value={filterRisk}
                 onChange={(e) => setFilterRisk(e.target.value)}
-                className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 bg-white"
+                className="px-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 bg-white text-slate-700"
               >
                 <option value="ALL">All Risk Levels</option>
                 <option value="HIGH">High Risk Only</option>
@@ -326,14 +459,6 @@ export const BatchPrediction = () => {
                 <option value="LOW">Low Risk Only</option>
               </select>
             </div>
-
-            <button
-              onClick={handleExportResults}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg shadow-sm transition"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
-              Export Predictions CSV
-            </button>
           </div>
 
           {/* Predictions Table */}
